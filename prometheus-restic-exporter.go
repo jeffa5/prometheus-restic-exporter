@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"net/http"
 	"os/exec"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -63,11 +66,12 @@ func (ss *SnapshotSummary) BackupDuration() time.Duration {
 }
 
 var (
-	addr         = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
-	resticBinary = flag.String("restic-binary", "restic", "The command to run as the restic command.")
-	printCommandOutput = flag.Bool("print-command-output", false, "Print the restic command's stdout and stderr after each run.")
+	addr                   = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
+	resticBinary           = flag.String("restic-binary", "restic", "The command to run as the restic command, supply comma separated list for multiple repos.")
+	printCommandOutput     = flag.Bool("print-command-output", false, "Print the restic command's stdout and stderr after each run.")
+	ignoreResticErrorCodes = flag.String("ignore-restic-error-codes", "", "Error codes from restic that should be ignored, continuing the exporter's execution")
 
-	snapshotLabelNames = []string{"id", "short_id", "hostname"}
+	snapshotLabelNames = []string{"id", "short_id", "hostname", "repo"}
 	metricNamespace    = "restic"
 	snapshotSubsystem  = "snapshot"
 
@@ -170,8 +174,8 @@ var (
 	}, snapshotLabelNames)
 )
 
-func setMetricsFromSnapshot(s *Snapshot) {
-	snapshotLabelValues := []string{s.Id, s.ShortId, s.Hostname}
+func setMetricsFromSnapshot(s *Snapshot, repoName string) {
+	snapshotLabelValues := []string{s.Id, s.ShortId, s.Hostname, repoName}
 
 	snapshotFilesNew.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.FilesNew))
 	snapshotFilesChanged.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.FilesChanged))
@@ -195,7 +199,24 @@ func setMetricsFromSnapshot(s *Snapshot) {
 	snapshotProgramVersion.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
 }
 
-func refreshSnapshotsMetrics(ctx context.Context, resticBinary string, printCommandOutput bool) error {
+func refreshSnapshotsMetricsMultiple(ctx context.Context, resticBinaries []string, ignoreResticErrorCodes []int, printCommandOutput bool) error {
+	for _, resticBinary := range resticBinaries {
+		repoNameParts := strings.SplitN(resticBinary, "-", 2)
+		repoName := repoNameParts[0]
+		if len(repoName) > 1 {
+			repoName = repoNameParts[1]
+		}
+
+		if err := refreshSnapshotsMetrics(ctx, resticBinary, repoName, ignoreResticErrorCodes, printCommandOutput); err != nil {
+			return fmt.Errorf("failed refreshing snapshot metrics for repo %q: %w", repoName, err)
+		}
+	}
+	return nil
+}
+
+func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, ignoreResticErrorCodes []int, printCommandOutput bool) error {
+	slog.Info("refreshing snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
+
 	cmd := exec.CommandContext(ctx, resticBinary, "snapshots", "--json")
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -228,7 +249,17 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary string, printComm
 		fmt.Println(string(stderr))
 	}
 
-	if err := cmd.Wait(); err != nil {
+	err = cmd.Wait()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		for _, code := range ignoreResticErrorCodes {
+			if code == exitErr.ExitCode() {
+				slog.Info("failed waiting for command to finish but exit code ignored", "code", code)
+				return nil
+			}
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("failed waiting for command to finish (run with --print-command-output for the output): %w", err)
 	}
 
@@ -239,7 +270,7 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary string, printComm
 	}
 
 	for _, s := range snapshots {
-		setMetricsFromSnapshot(&s)
+		setMetricsFromSnapshot(&s, repoName)
 	}
 
 	return nil
@@ -248,17 +279,30 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary string, printComm
 func main() {
 	flag.Parse()
 
-	slog.Info("Running", "addr", *addr, "resticBinary", *resticBinary)
+	slog.Info("Running", "addr", *addr, "resticBinary", *resticBinary, "printCommandOutput", *printCommandOutput, "ignoreResticErrorCodes", *ignoreResticErrorCodes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 
 	wg := sync.WaitGroup{}
 	wg.Go(func() {
+		defer stop()
+
 		t := time.NewTicker(time.Minute)
+		resticBinaries := strings.Split(*resticBinary, ",")
+
+		ignoreResticErrorCodesStr := strings.Split(*ignoreResticErrorCodes, ",")
+		var ignoreResticErrorCodes []int
+		for _, code := range ignoreResticErrorCodesStr {
+			codenum, err := strconv.Atoi(code)
+			if err != nil {
+				slog.Error("failed parsing ignore restic error code", "code", code)
+			}
+			ignoreResticErrorCodes = append(ignoreResticErrorCodes, codenum)
+		}
+
 		for {
-			slog.Info("refreshing snapshot metrics")
-			err := refreshSnapshotsMetrics(ctx, *resticBinary, *printCommandOutput)
+			err := refreshSnapshotsMetricsMultiple(ctx, resticBinaries, ignoreResticErrorCodes, *printCommandOutput)
 			if err != nil {
 				slog.Error("failed to refresh snapshot metrics", "error", err)
 				stop()
@@ -279,13 +323,13 @@ func main() {
 	}
 	http.Handle("/metrics", promhttp.Handler())
 	wg.Go(func() {
+		defer stop()
 		err := server.ListenAndServe()
 		if err != nil && err != http.ErrServerClosed {
 			slog.Error("failed listen and serve", "error", err)
 		} else {
 			slog.Info("finished listen and serve")
 		}
-		stop()
 	})
 
 	<-ctx.Done()
