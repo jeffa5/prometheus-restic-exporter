@@ -175,6 +175,32 @@ var (
 	}, snapshotLabelNames)
 )
 
+// deleteSnapshotMetricsForRepo calls DeletePartialMatch to clear results from old pruned snapshots
+func deleteSnapshotMetricsForRepo(repo string) {
+	partialMatchLabels := prometheus.Labels{"repo": repo}
+	snapshotFilesNew.DeletePartialMatch(partialMatchLabels)
+	snapshotFilesNew.DeletePartialMatch(partialMatchLabels)
+	snapshotFilesChanged.DeletePartialMatch(partialMatchLabels)
+	snapshotFilesUnmodified.DeletePartialMatch(partialMatchLabels)
+
+	snapshotDirsNew.DeletePartialMatch(partialMatchLabels)
+	snapshotDirsChanged.DeletePartialMatch(partialMatchLabels)
+	snapshotDirsUnmodified.DeletePartialMatch(partialMatchLabels)
+
+	snapshotDataBlobs.DeletePartialMatch(partialMatchLabels)
+	snapshotTreeBlobs.DeletePartialMatch(partialMatchLabels)
+
+	snapshotDataAdded.DeletePartialMatch(partialMatchLabels)
+	snapshotDataAddedPacked.DeletePartialMatch(partialMatchLabels)
+
+	snapshotTotalFilesProcessed.DeletePartialMatch(partialMatchLabels)
+	snapshotTotalBytesProcessed.DeletePartialMatch(partialMatchLabels)
+
+	snapshotBackupDurationSeconds.DeletePartialMatch(partialMatchLabels)
+
+	snapshotProgramVersion.DeletePartialMatch(partialMatchLabels)
+}
+
 func setMetricsFromSnapshot(s *Snapshot, repoName string) {
 	snapshotLabelValues := []string{s.Id, s.ShortId, s.Hostname, repoName}
 
@@ -269,6 +295,8 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string,
 	if err := json.Unmarshal(stdout, &snapshots); err != nil {
 		return fmt.Errorf("failed unmarshalling snapshot json: %w", err)
 	}
+
+	deleteSnapshotMetricsForRepo(repoName)
 
 	for _, s := range snapshots {
 		setMetricsFromSnapshot(&s, repoName)
