@@ -70,6 +70,7 @@ var (
 	resticBinary           = flag.String("restic-binary", "restic", "The command to run as the restic command, supply comma separated list for multiple repos.")
 	printCommandOutput     = flag.Bool("print-command-output", false, "Print the restic command's stdout and stderr after each run.")
 	ignoreResticErrorCodes = flag.String("ignore-restic-error-codes", "", "Error codes from restic that should be ignored, continuing the exporter's execution")
+	refreshInterval        = flag.Duration("refresh-interval", time.Minute, "Time between refreshing metrics")
 
 	snapshotLabelNames = []string{"id", "short_id", "hostname", "repo"}
 	metricNamespace    = "restic"
@@ -288,7 +289,7 @@ func main() {
 	wg.Go(func() {
 		defer stop()
 
-		t := time.NewTicker(time.Minute)
+		t := time.NewTicker(*refreshInterval)
 		resticBinaries := strings.Split(*resticBinary, ",")
 
 		ignoreResticErrorCodesStr := strings.Split(*ignoreResticErrorCodes, ",")
