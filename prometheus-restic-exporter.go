@@ -83,6 +83,13 @@ var (
 		Help:      "",
 	}, append(snapshotLabelNames, "program_version"))
 
+	snapshotTime = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: snapshotSubsystem,
+		Name:      "time_seconds",
+		Help:      "",
+	}, snapshotLabelNames)
+
 	snapshotFilesNew = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricNamespace,
 		Subsystem: snapshotSubsystem,
@@ -198,6 +205,8 @@ func deleteSnapshotMetricsForRepo(repo string) {
 
 	snapshotBackupDurationSeconds.DeletePartialMatch(partialMatchLabels)
 
+	snapshotTime.DeletePartialMatch(partialMatchLabels)
+
 	snapshotProgramVersion.DeletePartialMatch(partialMatchLabels)
 }
 
@@ -222,6 +231,8 @@ func setMetricsFromSnapshot(s *Snapshot, repoName string) {
 	snapshotTotalBytesProcessed.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.TotalBytesProcessed))
 
 	snapshotBackupDurationSeconds.WithLabelValues(snapshotLabelValues...).Set(s.Summary.BackupDuration().Seconds())
+
+	snapshotTime.WithLabelValues(snapshotLabelValues...).Set(float64(s.Time.Unix()))
 
 	snapshotProgramVersion.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
 }
