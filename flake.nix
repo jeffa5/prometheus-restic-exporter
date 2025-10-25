@@ -9,7 +9,7 @@
   }: let
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
-    pre = pkgs.buildGoModule {
+    prometheus-restic-exporter = pkgs.buildGoModule {
       pname = "prometheus-restic-exporter";
       version = "0.1.0";
       src = ./.;
@@ -17,8 +17,8 @@
     };
   in {
     packages.${system} = {
-      inherit pre;
-      default = pre;
+      inherit prometheus-restic-exporter;
+      default = prometheus-restic-exporter;
     };
 
     devShells.${system}.default = pkgs.mkShell {
