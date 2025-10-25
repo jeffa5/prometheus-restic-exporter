@@ -14,6 +14,7 @@
       version = "0.1.0";
       src = ./.;
       vendorHash = "sha256-b9CAU5kaFlAQskoCxzFGcEdwG6LCUhXZWFSzlzbNNPM=";
+      meta.mainProgram = "prometheus-restic-exporter";
     };
   in {
     packages.${system} = {
