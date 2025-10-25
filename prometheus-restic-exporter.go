@@ -67,7 +67,8 @@ func (ss *SnapshotSummary) BackupDuration() time.Duration {
 
 var (
 	addr                   = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
-	resticBinary           = flag.String("restic-binary", "restic", "The command to run as the restic command, supply comma separated list for multiple repos.")
+	resticBinary           = flag.String("restic-binary", "restic", "The command to run as the restic command.")
+	repoName               = flag.String("repo-name", "repo", "Name for the repo.")
 	printCommandOutput     = flag.Bool("print-command-output", false, "Print the restic command's stdout and stderr after each run.")
 	ignoreResticErrorCodes = flag.String("ignore-restic-error-codes", "", "Error codes from restic that should be ignored, continuing the exporter's execution")
 	refreshInterval        = flag.Duration("refresh-interval", time.Minute, "Time between refreshing metrics")
@@ -237,21 +238,6 @@ func setMetricsFromSnapshot(s *Snapshot, repoName string) {
 	snapshotProgramVersion.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
 }
 
-func refreshSnapshotsMetricsMultiple(ctx context.Context, resticBinaries []string, ignoreResticErrorCodes []int, printCommandOutput bool) error {
-	for _, resticBinary := range resticBinaries {
-		repoNameParts := strings.SplitN(resticBinary, "-", 2)
-		repoName := repoNameParts[0]
-		if len(repoName) > 1 {
-			repoName = repoNameParts[1]
-		}
-
-		if err := refreshSnapshotsMetrics(ctx, resticBinary, repoName, ignoreResticErrorCodes, printCommandOutput); err != nil {
-			return fmt.Errorf("failed refreshing snapshot metrics for repo %q: %w", repoName, err)
-		}
-	}
-	return nil
-}
-
 func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, ignoreResticErrorCodes []int, printCommandOutput bool) error {
 	slog.Info("refreshing snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
 
@@ -329,7 +315,6 @@ func main() {
 		defer stop()
 
 		t := time.NewTicker(*refreshInterval)
-		resticBinaries := strings.Split(*resticBinary, ",")
 
 		ignoreResticErrorCodesStr := strings.Split(*ignoreResticErrorCodes, ",")
 		var ignoreResticErrorCodes []int
@@ -342,7 +327,7 @@ func main() {
 		}
 
 		for {
-			err := refreshSnapshotsMetricsMultiple(ctx, resticBinaries, ignoreResticErrorCodes, *printCommandOutput)
+			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, ignoreResticErrorCodes, *printCommandOutput)
 			if err != nil {
 				slog.Error("failed to refresh snapshot metrics", "error", err)
 				stop()
