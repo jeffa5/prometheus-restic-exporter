@@ -328,6 +328,10 @@ func main() {
 			return
 		}
 
+		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "error_ignored")
+		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "failed")
+		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded")
+
 		for {
 			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, *printCommandOutput, *printCommandOutputOnError)
 			if err != nil {
@@ -341,7 +345,7 @@ func main() {
 					return
 				}
 			} else {
-				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "success").Inc()
+				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded").Inc()
 			}
 
 			select {
