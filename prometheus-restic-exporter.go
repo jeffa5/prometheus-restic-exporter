@@ -246,8 +246,6 @@ func setMetricsFromSnapshot(s *Snapshot, repoName string) {
 }
 
 func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
-	slog.Info("refreshing snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
-
 	cmd := exec.CommandContext(ctx, resticBinary, "snapshots", "--json")
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -333,6 +331,7 @@ func main() {
 		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded")
 
 		for {
+			slog.Info("refreshing snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
 			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, *printCommandOutput, *printCommandOutputOnError)
 			if err != nil {
 				if *ignoreErrors {
@@ -345,6 +344,7 @@ func main() {
 					return
 				}
 			} else {
+				slog.Info("refreshed snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
 				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded").Inc()
 			}
 
