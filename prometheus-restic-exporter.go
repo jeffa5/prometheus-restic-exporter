@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,8 +10,6 @@ import (
 	"net/http"
 	"os/exec"
 	"os/signal"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -66,12 +63,13 @@ func (ss *SnapshotSummary) BackupDuration() time.Duration {
 }
 
 var (
-	addr                   = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
-	resticBinary           = flag.String("restic-binary", "restic", "The command to run as the restic command.")
-	repoName               = flag.String("repo-name", "repo", "Name for the repo.")
-	printCommandOutput     = flag.Bool("print-command-output", false, "Print the restic command's stdout and stderr after each run.")
-	ignoreResticErrorCodes = flag.String("ignore-restic-error-codes", "", "Error codes from restic that should be ignored, continuing the exporter's execution")
-	refreshInterval        = flag.Duration("refresh-interval", time.Minute, "Time between refreshing metrics")
+	addr                      = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
+	resticBinary              = flag.String("restic-binary", "restic", "The command to run as the restic command.")
+	repoName                  = flag.String("repo-name", "repo", "Name for the repo.")
+	printCommandOutput        = flag.Bool("print-command-output", false, "Print the restic command's stdout and stderr after each run.")
+	printCommandOutputOnError = flag.Bool("print-command-output-on-error", false, "Print the restic command's stdout and stderr when restic fails.")
+	ignoreResticErrors        = flag.Bool("ignore-restic-errors", false, "Ignore errors from restic, continuing the exporter's execution")
+	refreshInterval           = flag.Duration("refresh-interval", time.Minute, "Time between refreshing metrics")
 
 	snapshotLabelNames = []string{"id", "short_id", "hostname", "repo"}
 	metricNamespace    = "restic"
@@ -238,7 +236,7 @@ func setMetricsFromSnapshot(s *Snapshot, repoName string) {
 	snapshotProgramVersion.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
 }
 
-func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, ignoreResticErrorCodes []int, printCommandOutput bool) error {
+func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, ignoreResticErrors bool, printCommandOutput, printCommandOutputOnError bool) error {
 	slog.Info("refreshing snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
 
 	cmd := exec.CommandContext(ctx, resticBinary, "snapshots", "--json")
@@ -266,25 +264,28 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string,
 		return fmt.Errorf("failed reading stderr from command: %w", err)
 	}
 
-	if printCommandOutput {
+	printOutput := func() {
 		fmt.Println("--- STDOUT ---")
 		fmt.Println(string(stdout))
 		fmt.Println("--- STDERR ---")
 		fmt.Println(string(stderr))
+
+	}
+
+	if printCommandOutput {
+		printOutput()
 	}
 
 	err = cmd.Wait()
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		for _, code := range ignoreResticErrorCodes {
-			if code == exitErr.ExitCode() {
-				slog.Info("failed waiting for command to finish but exit code ignored", "code", code)
-				return nil
-			}
-		}
-	}
 	if err != nil {
-		return fmt.Errorf("failed waiting for command to finish (run with --print-command-output for the output): %w", err)
+		if !printCommandOutput && printCommandOutputOnError {
+			printOutput()
+		}
+		if ignoreResticErrors{
+			slog.Info("failed waiting for command to finish but ignoring restic errors", "error", err)
+			return nil
+		}
+		return fmt.Errorf("failed waiting for command to finish: %w", err)
 	}
 
 	var snapshots []Snapshot
@@ -305,7 +306,7 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string,
 func main() {
 	flag.Parse()
 
-	slog.Info("Running", "addr", *addr, "resticBinary", *resticBinary, "printCommandOutput", *printCommandOutput, "ignoreResticErrorCodes", *ignoreResticErrorCodes)
+	slog.Info("Running", "addr", *addr, "resticBinary", *resticBinary, "printCommandOutput", *printCommandOutput, "printCommandOutputOnError", *printCommandOutputOnError, "ignoreResticErrors", *ignoreResticErrors)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
@@ -316,18 +317,8 @@ func main() {
 
 		t := time.NewTicker(*refreshInterval)
 
-		ignoreResticErrorCodesStr := strings.Split(*ignoreResticErrorCodes, ",")
-		var ignoreResticErrorCodes []int
-		for _, code := range ignoreResticErrorCodesStr {
-			codenum, err := strconv.Atoi(code)
-			if err != nil {
-				slog.Error("failed parsing ignore restic error code", "code", code)
-			}
-			ignoreResticErrorCodes = append(ignoreResticErrorCodes, codenum)
-		}
-
 		for {
-			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, ignoreResticErrorCodes, *printCommandOutput)
+			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, *ignoreResticErrors, *printCommandOutput, *printCommandOutputOnError)
 			if err != nil {
 				slog.Error("failed to refresh snapshot metrics", "error", err)
 				stop()
