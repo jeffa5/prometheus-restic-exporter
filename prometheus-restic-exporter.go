@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -83,6 +85,7 @@ var (
 	}, []string{"hostname", "repo", "status"})
 
 	snapshotSubsystem = "snapshot"
+	latestSnapshotSubsystem = "snapshot_latest"
 
 	snapshotProgramVersion = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricNamespace,
@@ -188,6 +191,111 @@ var (
 		Name:      "backup_duration_seconds",
 		Help:      "",
 	}, snapshotLabelNames)
+
+	snapshotProgramVersionLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "program_version",
+		Help:      "",
+	}, append(snapshotLabelNames, "program_version"))
+
+	snapshotTimeLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "time_seconds",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotFilesNewLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "files_new",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotFilesChangedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "files_changed",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotFilesUnmodifiedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "files_unmodified",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotDirsNewLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "dirs_new",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotDirsChangedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "dirs_changed",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotDirsUnmodifiedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "dirs_unmodified",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotDataBlobsLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "data_blobs",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotTreeBlobsLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "tree_blobs",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotDataAddedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "data_added",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotDataAddedPackedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "data_added_packed",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotTotalFilesProcessedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "total_files_processed",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotTotalBytesProcessedLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "total_bytes_processed",
+		Help:      "",
+	}, snapshotLabelNames)
+
+	snapshotBackupDurationSecondsLatest = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: latestSnapshotSubsystem,
+		Name:      "backup_duration_seconds",
+		Help:      "",
+	}, snapshotLabelNames)
 )
 
 // deleteSnapshotMetricsForRepo calls DeletePartialMatch to clear results from old pruned snapshots
@@ -216,6 +324,30 @@ func deleteSnapshotMetricsForRepo(repo string) {
 	snapshotTime.DeletePartialMatch(partialMatchLabels)
 
 	snapshotProgramVersion.DeletePartialMatch(partialMatchLabels)
+
+	snapshotFilesNewLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotFilesNewLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotFilesChangedLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotFilesUnmodifiedLatest.DeletePartialMatch(partialMatchLabels)
+
+	snapshotDirsNewLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotDirsChangedLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotDirsUnmodifiedLatest.DeletePartialMatch(partialMatchLabels)
+
+	snapshotDataBlobsLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotTreeBlobsLatest.DeletePartialMatch(partialMatchLabels)
+
+	snapshotDataAddedLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotDataAddedPackedLatest.DeletePartialMatch(partialMatchLabels)
+
+	snapshotTotalFilesProcessedLatest.DeletePartialMatch(partialMatchLabels)
+	snapshotTotalBytesProcessedLatest.DeletePartialMatch(partialMatchLabels)
+
+	snapshotBackupDurationSecondsLatest.DeletePartialMatch(partialMatchLabels)
+
+	snapshotTimeLatest.DeletePartialMatch(partialMatchLabels)
+
+	snapshotProgramVersionLatest.DeletePartialMatch(partialMatchLabels)
 }
 
 func setMetricsFromSnapshot(s *Snapshot, repoName string) {
@@ -243,6 +375,33 @@ func setMetricsFromSnapshot(s *Snapshot, repoName string) {
 	snapshotTime.WithLabelValues(snapshotLabelValues...).Set(float64(s.Time.Unix()))
 
 	snapshotProgramVersion.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
+}
+
+func setMetricsFromSnapshotLatest(s *Snapshot, repoName string) {
+	snapshotLabelValues := []string{s.Id, s.ShortId, s.Hostname, repoName}
+
+	snapshotFilesNewLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.FilesNew))
+	snapshotFilesChangedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.FilesChanged))
+	snapshotFilesUnmodifiedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.FilesUnmodified))
+
+	snapshotDirsNewLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.DirsNew))
+	snapshotDirsChangedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.DirsChanged))
+	snapshotDirsUnmodifiedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.DirsUnmodified))
+
+	snapshotDataBlobsLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.DataBlobs))
+	snapshotTreeBlobsLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.TreeBlobs))
+
+	snapshotDataAddedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.DataAdded))
+	snapshotDataAddedPackedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.DataAddedPacked))
+
+	snapshotTotalFilesProcessedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.TotalFilesProcessed))
+	snapshotTotalBytesProcessedLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Summary.TotalBytesProcessed))
+
+	snapshotBackupDurationSecondsLatest.WithLabelValues(snapshotLabelValues...).Set(s.Summary.BackupDuration().Seconds())
+
+	snapshotTimeLatest.WithLabelValues(snapshotLabelValues...).Set(float64(s.Time.Unix()))
+
+	snapshotProgramVersionLatest.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
 }
 
 func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
@@ -297,10 +456,17 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string,
 		return fmt.Errorf("failed unmarshalling snapshot json: %w", err)
 	}
 
+	slices.SortFunc(snapshots, func(a, b Snapshot) int {
+		return cmp.Compare(a.Time.Unix(), b.Time.Unix())
+	})
+
 	deleteSnapshotMetricsForRepo(repoName)
 
 	for _, s := range snapshots {
 		setMetricsFromSnapshot(&s, repoName)
+	}
+	if len(snapshots) > 0 {
+		setMetricsFromSnapshotLatest(&snapshots[len(snapshots)-1], repoName)
 	}
 
 	return nil
