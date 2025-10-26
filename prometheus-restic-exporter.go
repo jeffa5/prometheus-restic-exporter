@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"os/signal"
 	"sync"
@@ -68,12 +69,20 @@ var (
 	repoName                  = flag.String("repo-name", "repo", "Name for the repo.")
 	printCommandOutput        = flag.Bool("print-command-output", false, "Print the restic command's stdout and stderr after each run.")
 	printCommandOutputOnError = flag.Bool("print-command-output-on-error", false, "Print the restic command's stdout and stderr when restic fails.")
-	ignoreResticErrors        = flag.Bool("ignore-restic-errors", false, "Ignore errors from restic, continuing the exporter's execution")
+	ignoreErrors              = flag.Bool("ignore-errors", false, "Ignore errors when refreshing metrics, continuing the exporter's execution")
 	refreshInterval           = flag.Duration("refresh-interval", time.Minute, "Time between refreshing metrics")
 
 	snapshotLabelNames = []string{"id", "short_id", "hostname", "repo"}
 	metricNamespace    = "restic"
-	snapshotSubsystem  = "snapshot"
+
+	resticExporterRefreshCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace,
+		Subsystem: "exporter",
+		Name:      "refresh_count",
+		Help:      "",
+	}, []string{"hostname", "repo", "status"})
+
+	snapshotSubsystem = "snapshot"
 
 	snapshotProgramVersion = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricNamespace,
@@ -236,7 +245,7 @@ func setMetricsFromSnapshot(s *Snapshot, repoName string) {
 	snapshotProgramVersion.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
 }
 
-func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, ignoreResticErrors bool, printCommandOutput, printCommandOutputOnError bool) error {
+func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
 	slog.Info("refreshing snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
 
 	cmd := exec.CommandContext(ctx, resticBinary, "snapshots", "--json")
@@ -281,10 +290,6 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string,
 		if !printCommandOutput && printCommandOutputOnError {
 			printOutput()
 		}
-		if ignoreResticErrors{
-			slog.Info("failed waiting for command to finish but ignoring restic errors", "error", err)
-			return nil
-		}
 		return fmt.Errorf("failed waiting for command to finish: %w", err)
 	}
 
@@ -306,7 +311,7 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string,
 func main() {
 	flag.Parse()
 
-	slog.Info("Running", "addr", *addr, "resticBinary", *resticBinary, "printCommandOutput", *printCommandOutput, "printCommandOutputOnError", *printCommandOutputOnError, "ignoreResticErrors", *ignoreResticErrors)
+	slog.Info("Running", "addr", *addr, "resticBinary", *resticBinary, "printCommandOutput", *printCommandOutput, "printCommandOutputOnError", *printCommandOutputOnError, "ignoreErrors", *ignoreErrors)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
@@ -317,12 +322,26 @@ func main() {
 
 		t := time.NewTicker(*refreshInterval)
 
+		hostname, err := os.Hostname()
+		if err != nil {
+			slog.Error("failed to get hostname", "error", err)
+			return
+		}
+
 		for {
-			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, *ignoreResticErrors, *printCommandOutput, *printCommandOutputOnError)
+			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, *printCommandOutput, *printCommandOutputOnError)
 			if err != nil {
-				slog.Error("failed to refresh snapshot metrics", "error", err)
-				stop()
-				return
+				if *ignoreErrors {
+					slog.Info("failed to refresh snapshot metrics but ignoring errors", "error", err)
+					resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "error_ignored").Inc()
+				} else {
+					slog.Error("failed to refresh snapshot metrics", "error", err)
+					stop()
+					resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "failed").Inc()
+					return
+				}
+			} else {
+				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "success").Inc()
 			}
 
 			select {
