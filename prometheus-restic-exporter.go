@@ -497,7 +497,7 @@ func main() {
 		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded")
 
 		for {
-			slog.Info("refreshing snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
+			slog.Info("refreshing snapshot metrics", "resticBinary", *resticBinary, "repo", *repoName)
 			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, *printCommandOutput, *printCommandOutputOnError)
 			if err != nil {
 				if *ignoreErrors {
@@ -510,7 +510,7 @@ func main() {
 					return
 				}
 			} else {
-				slog.Info("refreshed snapshot metrics", "resticBinary", resticBinary, "repo", repoName)
+				slog.Info("refreshed snapshot metrics", "resticBinary", *resticBinary, "repo", *repoName)
 				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded").Inc()
 			}
 
