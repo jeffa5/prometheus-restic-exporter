@@ -22,6 +22,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+type StatsRawData struct {
+	TotalSize              int     `json:"total_size"`
+	TotalUncompressedSize  int     `json:"total_uncompressed_size"`
+	CompressionRatio       float64 `json:"compression_ratio"`
+	CompressionProgress    int     `json:"compression_progress"`
+	CompressionSpaceSaving float64 `json:"compression_space_saving"`
+	TotalBlobCount         int     `json:"total_blob_count"`
+	SnapshotsCount         int     `json:"snapshots_count"`
+}
+
 // Snapshot is the state of a resource at one point in time.
 type Snapshot struct {
 	Id       string    `json:"id"`
@@ -82,9 +92,9 @@ var (
 		Subsystem: "exporter",
 		Name:      "refresh_count",
 		Help:      "",
-	}, []string{"hostname", "repo", "status"})
+	}, []string{"hostname", "repo", "kind", "status"})
 
-	snapshotSubsystem = "snapshot"
+	snapshotSubsystem       = "snapshot"
 	latestSnapshotSubsystem = "snapshot_latest"
 
 	snapshotProgramVersion = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -296,6 +306,58 @@ var (
 		Name:      "backup_duration_seconds",
 		Help:      "",
 	}, snapshotLabelNames)
+
+	rawDataStatsSubsystem = "stats_raw_data"
+	statsLabelNames       = []string{"hostname", "repo"}
+
+	rawDataStatsTotalSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: rawDataStatsSubsystem,
+		Name:      "total_size",
+		Help:      "",
+	}, statsLabelNames)
+
+	rawDataStatsTotalUncompressedSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: rawDataStatsSubsystem,
+		Name:      "total_uncompressed_size",
+		Help:      "",
+	}, statsLabelNames)
+
+	rawDataStatsCompressionRatio = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: rawDataStatsSubsystem,
+		Name:      "compression_ratio",
+		Help:      "",
+	}, statsLabelNames)
+
+	rawDataStatsCompressionProgress = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: rawDataStatsSubsystem,
+		Name:      "compression_progress",
+		Help:      "",
+	}, statsLabelNames)
+
+	rawDataStatsCompressionSpaceSaving = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: rawDataStatsSubsystem,
+		Name:      "compression_space_saving",
+		Help:      "",
+	}, statsLabelNames)
+
+	rawDataStatsTotalBlobCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: rawDataStatsSubsystem,
+		Name:      "total_blob_count",
+		Help:      "",
+	}, statsLabelNames)
+
+	rawDataStatsSnapshotsCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace,
+		Subsystem: rawDataStatsSubsystem,
+		Name:      "snapshots_count",
+		Help:      "",
+	}, statsLabelNames)
 )
 
 // deleteSnapshotMetricsForRepo calls DeletePartialMatch to clear results from old pruned snapshots
@@ -404,8 +466,35 @@ func setMetricsFromSnapshotLatest(s *Snapshot, repoName string) {
 	snapshotProgramVersionLatest.WithLabelValues(append(snapshotLabelValues, s.ProgramVersion)...).Set(1)
 }
 
-func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
-	cmd := exec.CommandContext(ctx, resticBinary, "snapshots", "--json")
+type snapshotsRefresher struct{}
+
+func (snapshotsRefresher) Refresh(ctx context.Context, resticBinary, hostname, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
+	var snapshots []Snapshot
+
+	err := runResticCommand(ctx, resticBinary, []string{"snapshots"}, printCommandOutput, printCommandOutputOnError, &snapshots)
+	if err != nil {
+		return err
+	}
+
+	slices.SortFunc(snapshots, func(a, b Snapshot) int {
+		return cmp.Compare(a.Time.Unix(), b.Time.Unix())
+	})
+
+	deleteSnapshotMetricsForRepo(repoName)
+
+	for _, s := range snapshots {
+		setMetricsFromSnapshot(&s, repoName)
+	}
+	if len(snapshots) > 0 {
+		setMetricsFromSnapshotLatest(&snapshots[len(snapshots)-1], repoName)
+	}
+
+	return nil
+}
+
+func runResticCommand(ctx context.Context, resticBinary string, args []string, printCommandOutput, printCommandOutputOnError bool, out any) error {
+	args = append(args, "--json")
+	cmd := exec.CommandContext(ctx, resticBinary, args...)
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("failed getting stdout pipe on command: %w", err)
@@ -450,26 +539,72 @@ func refreshSnapshotsMetrics(ctx context.Context, resticBinary, repoName string,
 		return fmt.Errorf("failed waiting for command to finish: %w", err)
 	}
 
-	var snapshots []Snapshot
-
-	if err := json.Unmarshal(stdout, &snapshots); err != nil {
+	if err := json.Unmarshal(stdout, out); err != nil {
 		return fmt.Errorf("failed unmarshalling snapshot json: %w", err)
 	}
 
-	slices.SortFunc(snapshots, func(a, b Snapshot) int {
-		return cmp.Compare(a.Time.Unix(), b.Time.Unix())
-	})
-
-	deleteSnapshotMetricsForRepo(repoName)
-
-	for _, s := range snapshots {
-		setMetricsFromSnapshot(&s, repoName)
-	}
-	if len(snapshots) > 0 {
-		setMetricsFromSnapshotLatest(&snapshots[len(snapshots)-1], repoName)
-	}
-
 	return nil
+}
+
+func setMetricsFromStatsRawData(rawData StatsRawData, hostname, repoName string) {
+	labelValues := []string{hostname, repoName}
+
+	rawDataStatsTotalSize.WithLabelValues(labelValues...).Set(float64(rawData.TotalSize))
+	rawDataStatsTotalUncompressedSize.WithLabelValues(labelValues...).Set(float64(rawData.TotalUncompressedSize))
+	rawDataStatsCompressionRatio.WithLabelValues(labelValues...).Set(rawData.CompressionRatio)
+	rawDataStatsCompressionProgress.WithLabelValues(labelValues...).Set(float64(rawData.CompressionProgress))
+	rawDataStatsCompressionSpaceSaving.WithLabelValues(labelValues...).Set(rawData.CompressionSpaceSaving)
+	rawDataStatsTotalBlobCount.WithLabelValues(labelValues...).Set(float64(rawData.TotalBlobCount))
+	rawDataStatsSnapshotsCount.WithLabelValues(labelValues...).Set(float64(rawData.SnapshotsCount))
+}
+
+type statsRefresher struct{}
+
+func (statsRefresher) Refresh(ctx context.Context, resticBinary, hostname, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
+	var rawData StatsRawData
+	err := runResticCommand(ctx, resticBinary, []string{"stats", "--mode", "raw-data"}, printCommandOutput, printCommandOutputOnError, &rawData)
+	if err != nil {
+		return err
+	}
+
+	setMetricsFromStatsRawData(rawData, hostname, repoName)
+	return nil
+}
+
+type MetricsRefresher interface {
+	Refresh(ctx context.Context, resticBinary, hostname, repoName string, printCommandOutput, printCommandOutputOnError bool) error
+	Kind() string
+}
+
+func refreshMetrics(ctx context.Context, hostname string) bool {
+	refreshers := []MetricsRefresher{}
+
+	for _, refresher := range refreshers {
+		kind := refresher.Kind()
+
+		// initialise metrics with default value if not done already
+		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, kind, "error_ignored")
+		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, kind, "failed")
+		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, kind, "succeeded")
+
+		slog.Info("refreshing metrics", "resticBinary", *resticBinary, "repo", *repoName, "kind", kind)
+		err := refresher.Refresh(ctx, *resticBinary, hostname, *repoName, *printCommandOutput, *printCommandOutputOnError)
+		if err != nil {
+			if *ignoreErrors {
+				slog.Info("failed to refresh metrics but ignoring errors", "error", err, "kind", kind)
+				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, kind, "error_ignored").Inc()
+			} else {
+				slog.Error("failed to refresh metrics", "error", err, "kind", kind)
+				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, kind, "failed").Inc()
+				return false
+			}
+		} else {
+			slog.Info("refreshed metrics", "resticBinary", *resticBinary, "repo", *repoName, "kind", kind)
+			resticExporterRefreshCount.WithLabelValues(hostname, *repoName, kind, "succeeded").Inc()
+		}
+	}
+
+	return true
 }
 
 func main() {
@@ -492,28 +627,7 @@ func main() {
 			return
 		}
 
-		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "error_ignored")
-		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "failed")
-		resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded")
-
-		for {
-			slog.Info("refreshing snapshot metrics", "resticBinary", *resticBinary, "repo", *repoName)
-			err := refreshSnapshotsMetrics(ctx, *resticBinary, *repoName, *printCommandOutput, *printCommandOutputOnError)
-			if err != nil {
-				if *ignoreErrors {
-					slog.Info("failed to refresh snapshot metrics but ignoring errors", "error", err)
-					resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "error_ignored").Inc()
-				} else {
-					slog.Error("failed to refresh snapshot metrics", "error", err)
-					stop()
-					resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "failed").Inc()
-					return
-				}
-			} else {
-				slog.Info("refreshed snapshot metrics", "resticBinary", *resticBinary, "repo", *repoName)
-				resticExporterRefreshCount.WithLabelValues(hostname, *repoName, "succeeded").Inc()
-			}
-
+		for refreshMetrics(ctx, hostname) {
 			select {
 			case <-t.C:
 			case <-ctx.Done():
