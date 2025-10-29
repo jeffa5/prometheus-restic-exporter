@@ -468,6 +468,10 @@ func setMetricsFromSnapshotLatest(s *Snapshot, repoName string) {
 
 type snapshotsRefresher struct{}
 
+func (snapshotsRefresher) Kind() string {
+	return "snapshots"
+}
+
 func (snapshotsRefresher) Refresh(ctx context.Context, resticBinary, hostname, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
 	var snapshots []Snapshot
 
@@ -560,6 +564,10 @@ func setMetricsFromStatsRawData(rawData StatsRawData, hostname, repoName string)
 
 type statsRefresher struct{}
 
+func (statsRefresher) Kind() string {
+	return "stats"
+}
+
 func (statsRefresher) Refresh(ctx context.Context, resticBinary, hostname, repoName string, printCommandOutput, printCommandOutputOnError bool) error {
 	var rawData StatsRawData
 	err := runResticCommand(ctx, resticBinary, []string{"stats", "--mode", "raw-data"}, printCommandOutput, printCommandOutputOnError, &rawData)
@@ -577,7 +585,7 @@ type MetricsRefresher interface {
 }
 
 func refreshMetrics(ctx context.Context, hostname string) bool {
-	refreshers := []MetricsRefresher{}
+	refreshers := []MetricsRefresher{snapshotsRefresher{}, statsRefresher{}}
 
 	for _, refresher := range refreshers {
 		kind := refresher.Kind()
