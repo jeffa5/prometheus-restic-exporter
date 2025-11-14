@@ -497,7 +497,7 @@ func (snapshotsRefresher) Refresh(ctx context.Context, resticBinary, hostname, r
 }
 
 func runResticCommand(ctx context.Context, resticBinary string, args []string, printCommandOutput, printCommandOutputOnError bool, out any) error {
-	args = append(args, "--json")
+	args = append(args, "--json", "--no-lock")
 	cmd := exec.CommandContext(ctx, resticBinary, args...)
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -528,7 +528,6 @@ func runResticCommand(ctx context.Context, resticBinary string, args []string, p
 		fmt.Println(string(stdout))
 		fmt.Println("--- STDERR ---")
 		fmt.Println(string(stderr))
-
 	}
 
 	if printCommandOutput {
